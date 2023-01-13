@@ -71,11 +71,14 @@ def filter_Boxcar(recording:Recording,
     if not sweeps:
         sweeps = range(recording.sweep_count)
     for c in channels:
+        print('Getting data to convolve')
         ys = recording.get_y_matrix(mode='continuous', channels=[c], sweeps=sweeps)
+        print('Starting convolution')
         filtered = np.convolve(ys.flatten(), kernel, mode='same')
         filtered = np.reshape(filtered, (1,1,len(filtered)))
         filtered[:, :, :int(width/2)] = ys[:,:,:int(width/2)] # prevent 0-ing of the edges
         filtered[:, :, -int(width/2):] = ys[:,:,-int(width/2):] # prevent 0-ing of the edges
+        print('Finished convolution')
         recording.replace_y_data(mode='continuous', channels=[c], sweeps=sweeps, new_data=filtered)
 
     return recording
