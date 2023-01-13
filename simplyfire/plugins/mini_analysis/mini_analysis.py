@@ -24,6 +24,28 @@ import pandas as pd
 from simplyfire.utils import calculate
 from scipy import optimize
 from datetime import datetime
+from numba import jit, njit
+
+##@njit
+def first_greater_nb(arr,val):
+    for i in range(len(arr)):
+        if arr[i] > val:
+            return i
+    return -1
+	
+##@njit
+def first_less_nb(arr,val):
+    for i in range(len(arr)):
+        if arr[i] < val:
+            return i
+    return -1
+	
+##@njit
+def first_less_or_equal_nb(arr,val):
+    for i in range(len(arr)):
+        if arr[i] <= val:
+            return i
+    return -1   
 
 
 def filter_mini(mini_df: pd.DataFrame = None,
@@ -163,9 +185,11 @@ def find_mini_auto(xlim=None,
         in the result:
             #### list columns here
     """
+    print(kwargs)
     show_time = False
     global stop
     stop = False
+    print(len(xs))
     if xs is None or ys is None:
         if recording is None:
             return None  # cannot analyze
@@ -299,6 +323,7 @@ def find_mini_manual(xlim: tuple = None,
         in the result:
             #### list columns here
     """
+    print(kwargs)
     if xs is None or ys is None:
         if recording is None:
             return None  # insufficient data
@@ -379,7 +404,7 @@ def find_peak_recursive(xs,
         return find_peak_recursive(xs, ys, start, end - FUDGE, direction)
     return peak_idx
 
-
+@njit
 def find_mini_start(peak_idx: int,
                     ys: np.ndarray,
                     lag: int = 100,
@@ -579,14 +604,14 @@ def find_mini_halfwidth(amp: float,
         #                                                    prev_mini_decay_baseline) * prev_mini_direction - prev_mini_baseline * direction
     else:
         y_data = (ys - baseline) * direction
-    left_idx = np.where(y_data[:peak_idx] <= (amp * 0.5) * direction)
-    if len(left_idx[0]):
-        left_idx = left_idx[0][-1]
-    else:
+    ##left_idx = first_less_or_equal_nb(y_data[:peak_idx], (amp * 0.5) * direction)
+    left_idx = np.argmax(y_data[:peak_idx] >= (amp * 0.5) * direction)
+    if left_idx == -1:
         left_idx = None
-    right_idx = np.where(y_data[peak_idx:] <= (amp * 0.5) * direction)
-    if len(right_idx[0]):
-        right_idx = right_idx[0][0] + peak_idx
+    ##right_idx = first_less_or_equal_nb(y_data[peak_idx:], (amp * 0.5) * direction)
+    right_idx = np.argmax(y_data[peak_idx:] <= (amp * 0.5) * direction)
+    if right_idx > -1:
+        right_idx += peak_idx
     else:
         right_idx = None
     return left_idx, right_idx  # pick the shortest length
@@ -731,8 +756,10 @@ def calculate_mini_10_90_rise(xs:np.ndarray,
                               peak_idx:int,
                               direction:int=1,
                               sampling_rate:int=None):
-    low_idx = np.where((ys[start_idx:peak_idx]-baseline)*direction>amp*direction*0.1)[0][0] # take first spot
-    high_idx = np.where((ys[start_idx:peak_idx+1]-baseline)*direction>amp*direction*0.9)[0][0] # take first spot #peak_idx inclusive
+    ##low_idx = first_greater_nb((ys[start_idx:peak_idx+1]-baseline)*direction, amp*direction*0.1) # take first spot
+    low_idx = np.argmax((ys[start_idx:peak_idx+1]-baseline)*direction > amp*direction*0.1)
+    ##high_idx = first_greater_nb((ys[start_idx:peak_idx+1]-baseline)*direction, amp*direction*0.9) # take first spot #peak_idx inclusive
+    high_idx = np.argmax((ys[start_idx:peak_idx+1]-baseline)*direction > amp*direction*0.1)
 
     if sampling_rate:
         return (high_idx-low_idx)*1/sampling_rate*1000
@@ -740,9 +767,7 @@ def calculate_mini_10_90_rise(xs:np.ndarray,
         return (xs[high_idx] - xs[low_idx]) *1000
 
 
-
-
-
+@jit
 def analyze_candidate_mini(xs,
                            ys,
                            peak_idx=None,
@@ -795,7 +820,7 @@ def analyze_candidate_mini(xs,
                            ##################################
                            prev_peak_idx=None,
                            prev_peak=None,
-                           **kwargs
+                           manual_radius = 0
                            ):
     """
         peak_idx: int - Index within the xs data corresponding to a peak.
@@ -830,7 +855,6 @@ def analyze_candidate_mini(xs,
 
     """
     # print(f'start of analysis, prev peak passed is: {prev_peak}')
-
     show_time = False
     # perform conversions
     if sampling_rate == 'auto':
@@ -855,12 +879,13 @@ def analyze_candidate_mini(xs,
         except:
             print('prev peak is None')
             prev_peak = None
-    elif prev_peak_idx:  # had index provided but not the dict
+    elif prev_peak_idx:  # had index provided but not the dict  
         try:
             prev_peak_candidate = reference_df.loc[(reference_df['peak_idx'] == prev_peak_idx) &
                                                    (reference_df['channel'] == channel)]
             if prev_peak_candidate.shape[0] > 0:
                 prev_peak = prev_peak_candidate.squeeze().to_dict()
+
         except:
             prev_peak = None
     # initiate mini data dict
@@ -869,7 +894,8 @@ def analyze_candidate_mini(xs,
             'min_rise': min_rise, 'max_rise': max_rise, 'min_hw': min_hw, 'max_hw': max_hw, 'min_decay': min_decay,
             'min_s2n': min_s2n, 'max_s2n': max_s2n, 'min_drr': min_drr, 'max_drr': max_drr,
             'max_decay': max_decay, 'decay_max_points': decay_max_points, 'decay_max_interval': decay_max_interval,
-            'datetime': datetime.now().strftime('%m-%d-%y %H:%M:%S'), 'failure': None, 'success': True,
+##            'datetime': datetime.now().strftime('%m-%d-%y %H:%M:%S'), 
+            'failure': None, 'success': True,
             't': xs[peak_idx], 'peak_idx': peak_idx + offset, 'compound': False,
             'baseline_unit': y_unit}
     max_compound_interval_idx = max_compound_interval * sampling_rate / 1000
@@ -893,7 +919,7 @@ def analyze_candidate_mini(xs,
                 mini['success'] = False
                 mini['failure'] = 'Mini was previously found'
                 return mini
-        except Exception as e:  # if df is empty, will throw an error
+        except:  # if df is empty, will throw an error
             pass
 
     # store peak coordinate
@@ -922,6 +948,7 @@ def analyze_candidate_mini(xs,
     mini['start_idx'] = baseline_idx + offset
 
     if reference_df is not None or prev_peak is not None:
+##    if False:  
         # find the peak of the previous mini
         # peak x-value must be stored in the column 't'
         # check that the channels are the same
@@ -1008,7 +1035,7 @@ def analyze_candidate_mini(xs,
                                                        mini['prev_decay_A'],
                                                        mini['prev_decay_const']) * mini['prev_mini_direction'] + mini[
                                            'prev_baseline']  # get the extrapolated baseline value
-
+##    print("Before amplitude check: " + str(mini['success']))
     mini['amp'] = (mini['peak_coord_y'] - mini['baseline'])  # signed
     # store coordinate for start of mini (where the plot meets the baseline)
     mini['start_coord_x'] = xs[baseline_idx]
@@ -1018,6 +1045,8 @@ def analyze_candidate_mini(xs,
         mini['success'] = False
         mini['failure'] = 'Min amp not met'
         return mini
+		
+##    print("After amplitude check: " + str(mini['success']))
 
     if max_amp and mini['amp'] * direction > max_amp:
         mini['success'] = False
@@ -1139,10 +1168,10 @@ def analyze_candidate_mini(xs,
         # mimics Mini Analysis
         mini['decay_A'] = mini['amp'] * direction
         mini['decay_baseline'] = 0
-        decay_idx = np.where((ys[int(peak_idx): int(min(peak_idx + decay_max_points, len(ys)))] - mini[
+        decay_idx = np.argmax((ys[int(peak_idx): int(min(peak_idx + decay_max_points, len(ys)))] - mini[
             'baseline']) * direction < decay_p_amp * mini['amp'] * direction / 100)
-        if len(decay_idx[0]) > 0:
-            mini['decay_const'] = decay_idx[0][0] / sampling_rate * 1000
+        if decay_idx > 0:
+            mini['decay_const'] = decay_idx / sampling_rate * 1000
         else:
             mini['failure'] = 'Decay constant could not be calculated'
             mini['success'] = False
